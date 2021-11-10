@@ -3,6 +3,8 @@
 import os
 import typing
 
+from .. import parameters
+
 from . import dot_command
 from . import execute
 
@@ -12,7 +14,8 @@ __all__ = ['render']
 def render(engine: str, format: str, filepath: typing.Union[os.PathLike, str],
            renderer: typing.Optional[str] = None,
            formatter: typing.Optional[str] = None,
-           quiet: bool = False) -> str:
+           quiet: bool = False, *,
+           rendered_filename: typing.Optional[str] = None) -> str:
     """Render file with Graphviz ``engine`` into ``format``,
         return result filename.
 
@@ -23,6 +26,7 @@ def render(engine: str, format: str, filepath: typing.Union[os.PathLike, str],
         renderer: Output renderer (``'cairo'``, ``'gd'``, ...).
         formatter: Output formatter (``'cairo'``, ``'gd'``, ...).
         quiet: Suppress ``stderr`` output from the layout subprocess.
+        rendered_filename:
 
     Returns:
         The (possibly relative) path of the rendered file.
@@ -46,12 +50,26 @@ def render(engine: str, format: str, filepath: typing.Union[os.PathLike, str],
     dirname, filename = os.path.split(filepath)
     del filepath
 
+    if rendered_filename is not None:
+        suffix_format = get_rendering_format(rendered_filename)
+        if format is not None and format.lower() != suffix_format:
+            raise ValueError(f'format {format!r} contradicts suffix'
+                             f' from rendered_filename: {suffix_format!r}')
+        format = suffix_format
+
     cmd = dot_command.command(engine, format,
                               renderer=renderer, formatter=formatter)
-    cmd += ['-O', filename]
 
-    suffix = '.'.join(f for f in (formatter, renderer, format) if f is not None)
-    rendered = f'{filename}.{suffix}'
+    if rendered_filename is not None:
+        cmd.append(f'-o{rendered_filename}')
+        rendered = rendered_filename
+    else:
+        cmd.append('-O')
+        suffix_args = (formatter, renderer, format)
+        suffix = '.'.join(a for a in suffix_args if a is not None)
+        rendered = f'{filename}.{suffix}'
+
+    cmd.append(filename)
 
     if dirname:
         cwd = dirname
@@ -61,3 +79,21 @@ def render(engine: str, format: str, filepath: typing.Union[os.PathLike, str],
 
     execute.run_check(cmd, capture_output=True, cwd=cwd, quiet=quiet)
     return rendered
+
+
+def get_rendering_format(rendered_filename: str) -> str:
+    """Return rendering format derived from filename suffix."""
+    _, suffix = os.path.splitext(rendered_filename)
+    if not suffix:
+        raise ValueError('cannot infer rendering format from rendered_filename'
+                         f' without suffix: {rendered_filename}')
+
+    assert suffix.startswith('.')
+    format = suffix[1:].lower()
+
+    try:
+        parameters.verfify_format(format)
+    except ValueError as e:
+        raise ValueError('cannot infer rendering format from rendered_filename'
+                         f' suffix {rendered_filename!r}')
+    return format
